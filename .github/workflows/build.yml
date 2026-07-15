@@ -72,7 +72,17 @@ jobs:
           outputs: type=docker,dest=/tmp/mosdns-adg.tar
           cache-from: type=gha
 
-      - name: Create / update GitHub Release
+      # If a release with this version tag already exists (e.g. upstream
+      # versions unchanged since last run), delete it and its tag first,
+      # so every run produces a brand-new release with a fresh date.
+      - name: Delete previous release with same tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "${{ steps.ver.outputs.tag }}" \
+            --repo "${{ github.repository }}" --cleanup-tag --yes || true
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
