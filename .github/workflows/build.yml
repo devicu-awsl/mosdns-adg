@@ -1,9 +1,9 @@
-name: Build (GHCR + RouterOS tar)
+name: Build (GHCR + RouterOS tar release)
 
 on:
   schedule:
-    - cron: "17 19 * * 1"   # weekly, Monday 03:17 Beijing time
-  workflow_dispatch:         # manual "Run workflow" button
+    - cron: "17 19 * * 1"   # weekly, Monday 03:17 Beijing time ("17 19 * * *" = daily)
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -19,7 +19,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write     # needed to create releases
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
           AGH=$(curl -fsSL https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest | jq -r .tag_name)
           echo "mosdns=$MOSDNS"           >> "$GITHUB_OUTPUT"
           echo "agh=$AGH"                 >> "$GITHUB_OUTPUT"
-          echo "tag=${MOSDNS}_agh-${AGH}" >> "$GITHUB_OUTPUT"
+          echo "tag=mosdns-${MOSDNS}_agh-${AGH}" >> "$GITHUB_OUTPUT"
           echo "Building mosdns $MOSDNS + AdGuardHome $AGH"
 
       - uses: docker/setup-qemu-action@v3
@@ -72,9 +72,22 @@ jobs:
           outputs: type=docker,dest=/tmp/mosdns-adg.tar
           cache-from: type=gha
 
-      - name: Upload tar artifact
-        uses: actions/upload-artifact@v4
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: mosdns-adg
-          path: /tmp/mosdns-adg.tar
-          retention-days: 30
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: "mosdns ${{ steps.ver.outputs.mosdns }} + AdGuardHome ${{ steps.ver.outputs.agh }}"
+          body: |
+            arm64 image tar for MikroTik RouterOS offline import (RB5009).
+
+            - mosdns: ${{ steps.ver.outputs.mosdns }}
+            - AdGuardHome: ${{ steps.ver.outputs.agh }}
+            - CN rule lists: refreshed at build time (${{ github.run_id }})
+
+            Install:
+            1. Upload mosdns-adg.tar to usb1/ on the router
+            2. /container add file=usb1/mosdns-adg.tar interface=veth-dns \
+                 root-dir=usb1/containers/dns mounts=dns-data envlist=dns-env \
+                 start-on-boot=yes logging=yes comment="mosdns + AdGuard Home"
+          files: /tmp/mosdns-adg.tar
+          make_latest: true
