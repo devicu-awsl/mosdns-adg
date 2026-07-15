@@ -28,6 +28,12 @@ plugins:
         - /data/mosdns/rules/geosite_cn.txt
         - /data/mosdns/rules/geosite_apple_cn.txt
 
+  - tag: geosite_proxy
+    type: domain_set
+    args:
+      files:
+        - /data/mosdns/rules/geosite_proxy.txt
+
   - tag: geoip_cn
     type: ip_set
     args:
@@ -78,6 +84,11 @@ plugins:
     type: sequence
     args:
       - exec: $cache
+      - matches: has_resp
+        exec: accept
+      # known GFW/proxy domains -> remote directly (skip CN check)
+      - matches: qname $geosite_proxy
+        exec: $seq_remote
       - matches: has_resp
         exec: accept
       # CN domains -> China upstreams

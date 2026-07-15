@@ -41,6 +41,8 @@ RUN mkdir -p /out/rules \
       "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt" \
  && curl -fsSL -o /out/rules/geosite_apple_cn.txt \
       "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt" \
+ && curl -fsSL -o /out/rules/geosite_proxy.txt \
+      "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt" \
  && curl -fsSL -o /out/rules/geoip_cn.txt \
       "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt"
 

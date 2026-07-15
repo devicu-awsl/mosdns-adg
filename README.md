@@ -5,8 +5,8 @@ A self-updating DNS container for the MikroTik RB5009 (arm64, RouterOS 7.23.x): 
 ## Credits
 
 - Based on the idea of **alickale**'s combined image: https://hub.docker.com/r/alickale/mosdns-adguard (no longer updated — this repo is a maintained replacement)
-- Split-routing rule lists by **Loyalsoldier**: https://github.com/Loyalsoldier/v2ray-rules-dat and https://github.com/Loyalsoldier/geoip
-
+- Split-routing rule lists by **Loyalsoldier**: https://github.com/Loyalsoldier/v2ray-rules-dat and https://github.com/Loyalsoldier/geoip — built from data by [@v2fly/domain-list-community](https://github.com/v2fly/domain-list-community), [@felixonmars/dnsmasq-china-list](https://github.com/felixonmars/dnsmasq-china-list), and [@17mon/china_ip_list](https://github.com/17mon/china_ip_list)
+- Core software: [IrineSistiana/mosdns](https://github.com/IrineSistiana/mosdns), [AdguardTeam/AdGuardHome](https://github.com/AdguardTeam/AdGuardHome)
 
 ## How it works
 
@@ -18,6 +18,7 @@ AdGuard Home  ──  ad/tracker filtering + web UI :3000
         │  upstream 127.0.0.1:5335
         ▼
 mosdns v5     ──  split DNS (API :8080)
+        ├── GFW list domains → remote directly
         ├── CN domains  → 223.5.5.5 / 119.29.29.29 (UDP)
         └── everything else → DoH 1.1.1.1 / 8.8.8.8 (prefer_ipv4)
 ```
@@ -49,7 +50,7 @@ Updating the router = download the latest release tar, re-add the container. You
 
 ### Alternative: pull via registry mirror
 
-If you make the image public (GHCR package visibility → public, or push to Docker Hub), RouterOS can pull it directly. In mainland China set a Docker registry mirror first — replace with **your own** mirror address (e.g. a personal endpoint like `xxxxx.xuanyuan.run` from https://xuanyuan.run — each user has their own key, don't share it):
+If you make the image public (GHCR package visibility → public, or push to Docker Hub), RouterOS can pull it directly. In mainland China set a Docker registry mirror first — replace with **your own** mirror address (e.g. a personal endpoint like `xxxxxxxx.xuanyuan.run` from https://xuanyuan.run — each user has their own key, don't share it):
 
 ```
 /container/config set registry-url=https://<your-key>.xuanyuan.run tmpdir=usb1/pull

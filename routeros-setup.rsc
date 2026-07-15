@@ -36,9 +36,10 @@ add bridge=br-containers interface=veth-dns
 add chain=srcnat src-address=172.18.53.0/24 action=masquerade \
     comment="containers outbound"
 
-# --- 4. registry mirror (Shanghai — Docker Hub is blocked) ---
+# --- 4. registry mirror — ONLY needed for online pulls; skip for tar import.
+#     Replace <your-key> with YOUR personal xuanyuan.run endpoint (do not share it).
 /container/config
-set registry-url=https://21ghhr9qtgn436pf4s.xuanyuan.run \
+set registry-url=https://<your-key>.xuanyuan.run \
     tmpdir=usb1/pull ram-high=384M
 
 # --- 5. persistent /data mount (survives image upgrades) ---
