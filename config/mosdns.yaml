@@ -1,0 +1,102 @@
+# mosdns v5 — CN / foreign split resolver
+# Listens on 127.0.0.1:5335 (and 0.0.0.0 for debugging); AdGuard Home
+# sits in front of it on :53 and uses this as its only upstream.
+#
+# China domains  -> AliDNS / DNSPod (plain UDP, fast, correct CDN results)
+# Everything else -> DoH to 1.1.1.1 / 8.8.8.8
+#   NOTE (Shanghai): plain 8.8.8.8 UDP is poisoned. DoH to the raw IPs
+#   usually works, but if you run a proxy (e.g. clash/sing-box) it is far
+#   more reliable to point forward_remote at your proxy's DNS port instead,
+#   e.g. addr: "udp://192.168.88.x:1053".
+
+log:
+  level: warn
+
+# HTTP API for maintenance (metrics, cache dump/flush)
+#   http://<container-ip>:8080/metrics
+#   http://<container-ip>:8080/plugins/cache/flush
+#   http://<container-ip>:8080/plugins/cache/dump
+api:
+  http: "0.0.0.0:8080"
+
+plugins:
+  # ---------- data sets ----------
+  - tag: geosite_cn
+    type: domain_set
+    args:
+      files:
+        - /data/mosdns/rules/geosite_cn.txt
+        - /data/mosdns/rules/geosite_apple_cn.txt
+
+  - tag: geoip_cn
+    type: ip_set
+    args:
+      files:
+        - /data/mosdns/rules/geoip_cn.txt
+
+  # ---------- cache ----------
+  - tag: cache
+    type: cache
+    args:
+      size: 8192
+      lazy_cache_ttl: 86400
+      dump_file: /data/mosdns/cache.dump
+      dump_interval: 600
+
+  # ---------- upstreams ----------
+  - tag: forward_china
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "udp://223.5.5.5"     # AliDNS
+        - addr: "udp://119.29.29.29"  # DNSPod
+
+  - tag: forward_remote
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "https://1.1.1.1/dns-query"
+        - addr: "https://8.8.8.8/dns-query"
+        # If you have a local proxy providing clean DNS, prefer it:
+        # - addr: "udp://192.168.88.2:1053"
+
+  # ---------- sequences ----------
+  - tag: seq_china
+    type: sequence
+    args:
+      - exec: $forward_china
+
+  - tag: seq_remote
+    type: sequence
+    args:
+      - exec: prefer_ipv4
+      - exec: $forward_remote
+
+  - tag: main
+    type: sequence
+    args:
+      - exec: $cache
+      - matches: has_resp
+        exec: accept
+      # CN domains -> China upstreams
+      - matches: qname $geosite_cn
+        exec: $seq_china
+      - matches: has_resp
+        exec: accept
+      # everything else -> remote
+      - exec: $seq_remote
+
+  # ---------- servers ----------
+  - tag: udp_srv
+    type: udp_server
+    args:
+      entry: main
+      listen: "0.0.0.0:5335"
+
+  - tag: tcp_srv
+    type: tcp_server
+    args:
+      entry: main
+      listen: "0.0.0.0:5335"

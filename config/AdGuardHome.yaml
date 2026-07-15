@@ -1,0 +1,64 @@
+# AdGuard Home — pre-seeded config (skips the first-run wizard).
+# Web UI: http://<container-ip>:3000  — NO PASSWORD by default, LAN only!
+# Set one immediately: Settings -> and add a user, or run:
+#   AdGuardHome -c <this file> --update-password  (via container shell)
+#
+# Upstream is mosdns on 127.0.0.1:5335 inside the same container.
+
+http:
+  address: 0.0.0.0:3000
+  session_ttl: 720h
+
+users: []
+auth_attempts: 5
+block_auth_min: 15
+theme: auto
+language: ""
+
+dns:
+  bind_hosts:
+    - 0.0.0.0
+  port: 53
+  upstream_dns:
+    - 127.0.0.1:5335
+  bootstrap_dns:
+    - 223.5.5.5
+    - 119.29.29.29
+  upstream_mode: load_balance
+  cache_size: 0            # mosdns already caches; avoid double caching
+  ratelimit: 0
+  enable_dnssec: false
+  aaaa_disabled: false
+
+filtering:
+  protection_enabled: true
+  filtering_enabled: true
+  filters_update_interval: 24
+  blocking_mode: default
+
+filters:
+  # anti-AD — the most complete China-oriented blocklist, hosted in CN
+  - enabled: true
+    url: https://anti-ad.net/easylist.txt
+    name: anti-AD
+    id: 1
+  # AdGuard DNS filter (may be slow to update from CN; disable if it stalls)
+  - enabled: false
+    url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
+    name: AdGuard DNS filter
+    id: 2
+
+querylog:
+  enabled: true
+  interval: 24h        # keep small: RouterOS storage is limited
+  size_memory: 1000
+
+statistics:
+  enabled: true
+  interval: 24h
+
+log:
+  file: ""
+  verbose: false
+
+schema_version: 28
