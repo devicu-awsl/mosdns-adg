@@ -1,6 +1,12 @@
 # mosdns + AdGuard Home for MikroTik RouterOS
 
-A self-updating replacement for `alickale/mosdns-adguard`, built for the RB5009 (arm64) running RouterOS 7.23.x containers.
+A self-updating DNS container for the MikroTik RB5009 (arm64, RouterOS 7.23.x): AdGuard Home for ad-blocking + web UI, mosdns v5 for CN/foreign split resolution, rebuilt automatically with the latest upstream releases.
+
+## Credits
+
+- Based on the idea of **alickale**'s combined image: https://hub.docker.com/r/alickale/mosdns-adguard (no longer updated — this repo is a maintained replacement)
+- Split-routing rule lists by **Loyalsoldier**: https://github.com/Loyalsoldier/v2ray-rules-dat and https://github.com/Loyalsoldier/geoip
+
 
 ## How it works
 
@@ -8,80 +14,82 @@ A self-updating replacement for `alickale/mosdns-adguard`, built for the RB5009 
 LAN clients (192.168.88.0/24, DHCP from RB5009)
         │  port 53
         ▼
-AdGuard Home  ──  ad/tracker filtering + web UI on :3000
+AdGuard Home  ──  ad/tracker filtering + web UI :3000
         │  upstream 127.0.0.1:5335
         ▼
-mosdns v5     ──  split DNS
+mosdns v5     ──  split DNS (API :8080)
         ├── CN domains  → 223.5.5.5 / 119.29.29.29 (UDP)
-        └── everything else → DoH 1.1.1.1 / 8.8.8.8
+        └── everything else → DoH 1.1.1.1 / 8.8.8.8 (prefer_ipv4)
 ```
 
-GitHub Actions rebuilds the image **every night at 03:17 Beijing time**, always pulling:
+GitHub Actions (weekly + manual + on push) resolves the **latest** mosdns and AdGuard Home releases, bakes in fresh CN rule lists, then:
 
-- the latest `IrineSistiana/mosdns` release (currently v5.3.4)
-- the latest stable `AdguardTeam/AdGuardHome` release
-- fresh China domain/IP lists from `Loyalsoldier/v2ray-rules-dat` and `Loyalsoldier/geoip`
+- pushes the arm64 image to GHCR (`ghcr.io/<you>/<repo>`)
+- publishes a **GitHub Release** with `mosdns-adg.tar` attached — the offline-import file for RouterOS
 
-So "update everything" on the router is just: pull the new image, recreate the container. Your settings live in the mounted `/data` volume and survive upgrades.
+Updating the router = download the latest release tar, re-add the container. Your settings live in the mounted `/data` volume and survive upgrades.
 
-## Setup — 3 steps
+## Install on the RB5009
 
-### 1. Fork / create the repo
+1. **One-time prep** — see `routeros-setup.rsc`: install the `container` package (Extra packages, arm64, matching your ROS version), enable `device-mode container=yes` (requires pressing the physical reset button), plug in a USB drive formatted ext4 (`usb1`). Create the veth, bridge, NAT rule, `dns-data` mount and `dns-env` envlist from the script.
+2. **Get the image** — repo → Releases → Latest → download `mosdns-adg.tar`, then upload it to the router:
+   ```
+   scp mosdns-adg.tar admin@192.168.88.1:usb1/
+   ```
+3. **Create and start the container**:
+   ```
+   /container add file=usb1/mosdns-adg.tar interface=veth-dns \
+       root-dir=usb1/containers/dns mounts=dns-data envlist=dns-env \
+       start-on-boot=yes logging=yes comment="mosdns + AdGuard Home"
+   /container set [find comment~"mosdns"] memory-high=384M shm-size=64M
+   /container start [find comment~"mosdns"]
+   ```
+   The tar can be deleted from `usb1/` once the container is running.
+4. **Point the LAN at it** — set `dns-server=172.18.53.2` on the DHCP network (in the `.rsc`), plus the optional dst-nat rules for devices with hardcoded DNS. Keep the router's own `/ip dns servers` on an external resolver (e.g. `223.5.5.5`) to avoid a chicken-and-egg during upgrades.
 
-Put these files in a GitHub repo, then:
+### Alternative: pull via registry mirror
 
-1. Edit `.github/workflows/build.yml` → change `DOCKERHUB_IMAGE` to `<your-dockerhub-user>/mosdns-adguard`.
-2. Repo → Settings → Secrets and variables → Actions, add:
-   - `DOCKERHUB_USERNAME` — your Docker Hub username
-   - `DOCKERHUB_TOKEN` — a Docker Hub access token (hub.docker.com → Account Settings → Security)
-3. Go to the Actions tab and run the workflow manually once (`workflow_dispatch`).
-
-The image is pushed to **Docker Hub** (so the `xuanyuan.run` mirror can serve it to your router in Shanghai) and to GHCR as a backup.
-
-### 2. Configure the RB5009
-
-Run the commands in `routeros-setup.rsc` (read the STEP 0 notes first — you need the container `.npk` package installed and `device-mode container=yes` enabled, which requires pressing the physical reset button).
-
-Key Shanghai-specific line:
+If you make the image public (GHCR package visibility → public, or push to Docker Hub), RouterOS can pull it directly. In mainland China set a Docker registry mirror first — replace with **your own** mirror address (e.g. a personal endpoint like `xxxxx.xuanyuan.run` from https://xuanyuan.run — each user has their own key, don't share it):
 
 ```
-/container/config set registry-url=https://21ghhr9qtgn436pf4s.xuanyuan.run tmpdir=usb1/pull
+/container/config set registry-url=https://<your-key>.xuanyuan.run tmpdir=usb1/pull
+/container add remote-image=<dockerhub-user>/mosdns-adguard:latest interface=veth-dns ...
 ```
 
-**Storage warning:** the RB5009's internal NAND is 1 GB. The image is ~70 MB but query logs and filter lists grow — use a USB drive (`usb1`) for `root-dir`, `tmpdir`, and the `/data` mount. If you must use NAND, disable the AdGuard query log.
+## Endpoints (container IP 172.18.53.2)
 
-### 3. Point the LAN at it
-
-Included in the `.rsc`: set `dns-server=172.18.53.2` on the DHCP network, plus optional dst-nat rules to hijack devices with hardcoded DNS.
-
-Web UI: `http://172.18.53.2:3000` — it boots pre-configured with **no password**. Set one immediately in Settings.
+| Port | Service |
+|---|---|
+| 53 | AdGuard Home DNS (what clients use) |
+| 3000 | AGH web UI + REST API — **no password by default, set one immediately** |
+| 5335 | mosdns resolver (direct testing) |
+| 8080 | mosdns API: `/metrics`, `/plugins/cache/flush`, `/plugins/cache/dump` |
 
 ## Customizing
 
 | What | Where |
 |---|---|
-| mosdns routing/upstreams | edit `/data/mosdns/config.yaml` on the USB drive, restart container |
-| AdGuard filters/settings | web UI (persisted to `/data/adguard/conf/AdGuardHome.yaml`) |
-| Default configs baked into image | `config/` in this repo |
-| Build schedule | cron in `.github/workflows/build.yml` |
+| mosdns routing/upstreams | `/data/mosdns/config.yaml` on the USB drive → restart container |
+| AdGuard filters/settings | web UI (persisted in `/data/adguard/conf/`) |
+| Defaults baked into image | `config/` in this repo |
+| Build schedule | cron in `.github/workflows/build.yml` (weekly by default) |
 
-If you run a proxy (clash / sing-box / etc.), point `forward_remote` in `mosdns.yaml` at its DNS port instead of raw DoH — see the comments in the file. DoH to `1.1.1.1`/`8.8.8.8` from Shanghai works most of the time but can be throttled or blocked during sensitive periods.
+If you run a proxy (clash / sing-box), point `forward_remote` in `mosdns.yaml` at its DNS port instead of raw DoH — see comments in the file. Keep AGH *Fallback DNS* **empty** to avoid leaks.
 
-## Upgrading on the router
+## Upgrading
+
+Download the new release tar, upload to `usb1/`, then:
 
 ```
-/container/stop [find comment~"mosdns"]
-/container/remove [find comment~"mosdns"]
-/container add remote-image=<you>/mosdns-adguard:latest interface=veth-dns \
-    root-dir=usb1/containers/dns mounts=dns-data envlist=dns-env \
-    start-on-boot=yes logging=yes comment="mosdns + AdGuard Home"
+/container stop   [find comment~"mosdns"]
+/container remove [find comment~"mosdns"]
 ```
 
-(RouterOS has no `docker pull`-in-place; remove + re-add re-pulls. `/data` is untouched.)
+…and repeat install step 3. `root-dir` is disposable; `usb1/dns-data` (your settings) is never touched.
 
 ## Troubleshooting
 
-- **Pull stuck at 0%** — mirror issue. Try again, or temporarily switch `registry-url` to another mirror. Check `/log/print where topics~"container"`.
-- **Container starts then stops** — usually a port conflict or bad config; check logs. Make sure the router's own DNS service isn't bound in a way that conflicts (the container has its own IP, so normally fine).
-- **Foreign domains time out** — DoH being interfered with; switch `forward_remote` to your proxy's DNS.
-- **`wait: -n` error in logs** — harmless on very old busybox; the fallback `wait` still works.
+- **Container starts then stops** — check `/log print where topics~"container"`; usually a bad config edit in `/data/mosdns/config.yaml`.
+- **Foreign domains time out** — DoH being throttled; switch `forward_remote` to your proxy's DNS.
+- **Instant crash-loop after tar import** — wrong architecture: the tar must be built `--platform linux/arm64` for the RB5009.
+- **GHCR push 403 in Actions** — repo Settings → Actions → General → Workflow permissions → Read and write.
