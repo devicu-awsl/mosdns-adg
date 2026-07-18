@@ -28,9 +28,15 @@ jobs:
 
       - name: Resolve latest upstream versions
         id: ver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MOSDNS=$(curl -fsSL https://api.github.com/repos/IrineSistiana/mosdns/releases/latest | jq -r .tag_name)
-          AGH=$(curl -fsSL https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest | jq -r .tag_name)
+          MOSDNS=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/IrineSistiana/mosdns/releases/latest | jq -r .tag_name)
+          AGH=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest | jq -r .tag_name)
+          case "$MOSDNS" in v*) ;; *) echo "::error::bad mosdns tag: '$MOSDNS' (API rate-limited?)"; exit 1 ;; esac
+          case "$AGH"    in v*) ;; *) echo "::error::bad AdGuardHome tag: '$AGH' (API rate-limited?)"; exit 1 ;; esac
           echo "mosdns=$MOSDNS"           >> "$GITHUB_OUTPUT"
           echo "agh=$AGH"                 >> "$GITHUB_OUTPUT"
           echo "tag=mosdns-${MOSDNS}_agh-${AGH}" >> "$GITHUB_OUTPUT"
