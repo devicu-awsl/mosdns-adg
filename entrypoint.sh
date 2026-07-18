@@ -13,6 +13,29 @@ mkdir -p "$MOSDNS_DIR/rules" "$AGH_DIR/work" "$AGH_DIR/conf"
 [ -f "$MOSDNS_DIR/config.yaml" ]        || cp /opt/defaults/mosdns.yaml      "$MOSDNS_DIR/config.yaml"
 [ -f "$AGH_DIR/conf/AdGuardHome.yaml" ] || cp /opt/defaults/AdGuardHome.yaml "$AGH_DIR/conf/AdGuardHome.yaml"
 
+# Opt-in overwrite: set env OVERWRITE_MOSDNS_CONFIG=yes (and/or
+# OVERWRITE_AGH_CONFIG=yes) to replace the live config with this image's
+# default. The old file is backed up next to it first. Intended as a
+# one-shot: set the env, restart once, then remove the env.
+TS=$(date +%Y%m%d-%H%M%S)
+if [ "$OVERWRITE_MOSDNS_CONFIG" = "yes" ] || [ "$OVERWRITE_MOSDNS_CONFIG" = "true" ]; then
+    cp "$MOSDNS_DIR/config.yaml" "$MOSDNS_DIR/config.yaml.bak-$TS"
+    cp /opt/defaults/mosdns.yaml "$MOSDNS_DIR/config.yaml"
+    echo "[entrypoint] mosdns config REPLACED with image default (backup: config.yaml.bak-$TS)"
+fi
+if [ "$OVERWRITE_AGH_CONFIG" = "yes" ] || [ "$OVERWRITE_AGH_CONFIG" = "true" ]; then
+    cp "$AGH_DIR/conf/AdGuardHome.yaml" "$AGH_DIR/conf/AdGuardHome.yaml.bak-$TS"
+    cp /opt/defaults/AdGuardHome.yaml "$AGH_DIR/conf/AdGuardHome.yaml"
+    echo "[entrypoint] AdGuard config REPLACED with image default (backup: AdGuardHome.yaml.bak-$TS)"
+fi
+
+# Notice (no action taken): live config differs from this image's default
+if ! cmp -s "$MOSDNS_DIR/config.yaml" /opt/defaults/mosdns.yaml; then
+    echo "[entrypoint] NOTICE: live mosdns config differs from image default."
+    echo "[entrypoint]         If you have not customized it, the image may carry"
+    echo "[entrypoint]         improvements. Set env OVERWRITE_MOSDNS_CONFIG=yes to adopt."
+fi
+
 # Rule lists ARE refreshed on every start — they are baked into each
 # nightly image build, so pulling a new image = fresh CN lists.
 cp /opt/defaults/rules/*.txt "$MOSDNS_DIR/rules/"

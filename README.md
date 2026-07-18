@@ -30,7 +30,9 @@ GitHub Actions (weekly + manual + on push) resolves the **latest** mosdns and Ad
 
 Updating the router = download the latest release tar, re-add the container. Your settings live in the mounted `/data` volume and survive upgrades.
 
-## Install on the RB5009
+## Fresh install (first time — configs come from this repo)
+
+On first boot the container seeds `usb1/dns-data` with the default configs from `config/` in this repo (baked into the image). After that, those live copies are yours.
 
 1. **One-time prep** — see `routeros-setup.rsc`: install the `container` package (Extra packages, arm64, matching your ROS version), enable `device-mode container=yes` (requires pressing the physical reset button), plug in a USB drive formatted ext4 (`usb1`). Create the veth, bridge, NAT rule, `dns-data` mount and `dns-env` envlist from the script.
 2. **Get the image** — repo → Releases → Latest → download `mosdns-adg.tar`, then upload it to the router:
@@ -47,6 +49,22 @@ Updating the router = download the latest release tar, re-add the container. You
    ```
    The tar can be deleted from `usb1/` once the container is running.
 4. **Point the LAN at it** — set `dns-server=172.18.53.2` on the DHCP network (in the `.rsc`), plus the optional dst-nat rules for devices with hardcoded DNS. Keep the router's own `/ip dns servers` on an external resolver (e.g. `223.5.5.5`) to avoid a chicken-and-egg during upgrades.
+5. **Set an AdGuard Home password** — http://172.18.53.2:3000 works immediately with **no auth**; fix that first.
+
+## Normal upgrade (configs on your router stay as they are)
+
+An upgrade replaces only the binaries and the bundled CN rule lists. Your configs and AdGuard settings in `usb1/dns-data` are **never modified**.
+
+1. Download the latest release `mosdns-adg.tar`, upload to `usb1/` (overwrite the old one if present).
+2. Recreate the container (RouterOS has no in-place pull):
+   ```
+   /container stop   [find comment~"mosdns"]
+   /container remove [find comment~"mosdns"]
+   ```
+   …then repeat step 3 of the fresh install. `root-dir` is disposable; `usb1/dns-data` is sacred.
+3. Check the log: `/log print where topics~"container"`. If the image ships a **newer default config** than the one live on your router, a NOTICE line appears — see the next section to adopt it (optional; ignoring it is always safe).
+
+**Did the default configs change?** Each release's notes state the last-modified commit for `config/mosdns.yaml` and `config/AdGuardHome.yaml`. If those dates are older than your install, this release changes binaries/rules only and there is nothing to adopt.
 
 ### Alternative: pull via registry mirror
 
@@ -94,3 +112,15 @@ Download the new release tar, upload to `usb1/`, then:
 - **Foreign domains time out** — DoH being throttled; switch `forward_remote` to your proxy's DNS.
 - **Instant crash-loop after tar import** — wrong architecture: the tar must be built `--platform linux/arm64` for the RB5009.
 - **GHCR push 403 in Actions** — repo Settings → Actions → General → Workflow permissions → Read and write.
+
+## Adopting new default configs after an upgrade
+
+Your live configs in `usb1/dns-data` are **never** touched by upgrades. When a new image ships an improved default config (the container log prints a NOTICE if yours differs), adopt it like this — your old file is backed up automatically as `*.bak-<timestamp>`:
+
+```
+/container/envs add name=dns-env key=OVERWRITE_MOSDNS_CONFIG value=yes
+/container restart [find comment~"mosdns"]
+/container/envs remove [find key=OVERWRITE_MOSDNS_CONFIG]
+```
+
+(`OVERWRITE_AGH_CONFIG=yes` does the same for AdGuard Home — rarely wanted, since that file holds your UI settings.) Remove the env afterwards, otherwise every restart overwrites again. Re-apply your customizations (e.g. proxy DNS upstream) from the backup if you had any.

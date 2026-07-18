@@ -23,6 +23,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve latest upstream versions
         id: ver
@@ -33,6 +35,14 @@ jobs:
           echo "agh=$AGH"                 >> "$GITHUB_OUTPUT"
           echo "tag=mosdns-${MOSDNS}_agh-${AGH}" >> "$GITHUB_OUTPUT"
           echo "Building mosdns $MOSDNS + AdGuardHome $AGH"
+
+      - name: Config last-change info
+        id: cfg
+        run: |
+          M=$(git log -1 --format='%cs (%h) %s' -- config/mosdns.yaml)
+          A=$(git log -1 --format='%cs (%h) %s' -- config/AdGuardHome.yaml)
+          echo "mosdns_cfg=$M" >> "$GITHUB_OUTPUT"
+          echo "agh_cfg=$A"    >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -93,6 +103,12 @@ jobs:
             - mosdns: ${{ steps.ver.outputs.mosdns }}
             - AdGuardHome: ${{ steps.ver.outputs.agh }}
             - CN rule lists: refreshed at build time (${{ github.run_id }})
+
+            Default config last changed:
+            - config/mosdns.yaml: ${{ steps.cfg.outputs.mosdns_cfg }}
+            - config/AdGuardHome.yaml: ${{ steps.cfg.outputs.agh_cfg }}
+            (If these dates are older than your install, this release changes
+            binaries/rule lists only — nothing to adopt on your router.)
 
             Install:
             1. Upload mosdns-adg.tar to usb1/ on the router
