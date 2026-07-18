@@ -30,7 +30,8 @@ GitHub Actions (weekly + manual + on push) resolves the **latest** mosdns and Ad
 
 Updating the router = download the latest release tar, re-add the container. Your settings live in the mounted `/data` volume and survive upgrades.
 
-## Fresh install (first time — configs come from this repo)
+## Fresh install 
+> First time — configs come from this repo.
 
 On first boot the container seeds `usb1/dns-data` with the default configs from `config/` in this repo (baked into the image). After that, those live copies are yours.
 
@@ -51,7 +52,8 @@ On first boot the container seeds `usb1/dns-data` with the default configs from 
 4. **Point the LAN at it** — set `dns-server=172.18.53.2` on the DHCP network (in the `.rsc`), plus the optional dst-nat rules for devices with hardcoded DNS. Keep the router's own `/ip dns servers` on an external resolver (e.g. `223.5.5.5`) to avoid a chicken-and-egg during upgrades.
 5. **Set an AdGuard Home password** — http://172.18.53.2:3000 works immediately with **no auth**; fix that first.
 
-## Normal upgrade (configs on your router stay as they are)
+## Normal upgrade 
+> Configs on your router stay as they are.
 
 An upgrade replaces only the binaries and the bundled CN rule lists. Your configs and AdGuard settings in `usb1/dns-data` are **never modified**.
 
