@@ -40,6 +40,58 @@ plugins:
       files:
         - /data/mosdns/rules/geoip_cn.txt
 
+  # ---------- Apple split-DNS domain sets ----------
+  # Bare entry = suffix match (domain + all subdomains, i.e. "*."),
+  # full: = exact match. See the Apple rules in the main sequence below.
+  #
+  # [Host] *.tv.apple.com / *.video.apple.com = 1.1.1.1 :
+  # force Apple TV+/Music streaming onto Apple's INTERNATIONAL CDN via
+  # Cloudflare DoH.
+  - tag: apple_intl_host
+    type: domain_set
+    args:
+      exps:
+        - tv.apple.com
+        - video.apple.com
+
+  # PROXY -> resolve via remote DoH so DNS results match a proxied egress.
+  - tag: apple_intl
+    type: domain_set
+    args:
+      exps:
+        - fitness.apple.com
+        - arcade.apple.com
+        - full:games.apple.com
+
+  # iCloud Private Relay setup/egress + Apple DoH -> clean international DNS.
+  # These must resolve to genuine Apple/relay IPs (not a China CDN or poisoned
+  # result) for Private Relay to come up. Replaces the previous broad
+  # akamaized.net rule with just the Apple-relay host. Ref: Control D iCloud
+  # Private Relay excluded-domains list. Matched BEFORE apple_direct so the
+  # aaplimg.com relay host escapes the China-DNS bucket below.
+  - tag: apple_relay
+    type: domain_set
+    args:
+      exps:
+        - apple-dns.net
+        - apple-relay.cloudflare.com
+        - apple-relay.akamaized.net
+        - apple-relay.fastly-edge.com
+        - doh.dns.apple.com.v.aaplimg.com
+
+  # DIRECT -> keep on China DNS for China CDN nodes.
+  - tag: apple_direct
+    type: domain_set
+    args:
+      exps:
+        - apple.com.cn
+        - icloud.com.cn
+        - full:music.apple.com
+        - mzstatic.com
+        - aaplimg.com
+        - full:streamingaudio.itunes.apple.com
+        - audio-ssl.itunes.apple.com
+
   # ---------- cache ----------
   - tag: cache
     type: cache
@@ -68,6 +120,13 @@ plugins:
         # If you have a local proxy providing clean DNS, prefer it:
         # - addr: "udp://192.168.88.2:1053"
 
+  # Cloudflare-only upstream for the Apple [Host] override (server:1.1.1.1)
+  - tag: forward_cloudflare
+    type: forward
+    args:
+      upstreams:
+        - addr: "https://1.1.1.1/dns-query"
+
   # ---------- sequences ----------
   - tag: seq_china
     type: sequence
@@ -80,10 +139,36 @@ plugins:
       - exec: prefer_ipv4
       - exec: $forward_remote
 
+  - tag: seq_cloudflare
+    type: sequence
+    args:
+      - exec: prefer_ipv4
+      - exec: $forward_cloudflare
+
   - tag: main
     type: sequence
     args:
       - exec: $cache
+      - matches: has_resp
+        exec: accept
+      # Apple TV+/Music streaming -> Cloudflare (international CDN) [Host]
+      - matches: qname $apple_intl_host
+        exec: $seq_cloudflare
+      - matches: has_resp
+        exec: accept
+      # Apple international services (PROXY) -> remote DoH
+      - matches: qname $apple_intl
+        exec: $seq_remote
+      - matches: has_resp
+        exec: accept
+      # iCloud Private Relay / Apple DoH -> clean international DNS
+      - matches: qname $apple_relay
+        exec: $seq_remote
+      - matches: has_resp
+        exec: accept
+      # Apple domains pinned to China DNS (DIRECT)
+      - matches: qname $apple_direct
+        exec: $seq_china
       - matches: has_resp
         exec: accept
       # known GFW/proxy domains -> remote directly (skip CN check)

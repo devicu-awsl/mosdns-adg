@@ -47,6 +47,32 @@ filters:
     url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
     name: AdGuard DNS filter
     id: 2
+  # a-dove-is-dumb — blocklist
+  - enabled: true
+    url: https://cdn.jsdelivr.net/gh/ignaciocastro/a-dove-is-dumb@latest/list.txt
+    name: a-dove-is-dumb
+    id: 3
+  # a-dove-is-dumb — IPv6 blocklist
+  - enabled: true
+    url: https://a.dove.isdumb.one/ipv6.txt
+    name: a-dove-is-dumb IPv6
+    id: 4
+
+# Custom rules applied on top of the subscribed filters above.
+user_rules:
+  # Block all Adobe telemetry / activation-check domains (apex + subdomains)
+  - '||ic.adobe.io^'
+  - '||adobestats.io^'
+  # Allow-list so no blocklist can break iCloud Private Relay or Apple sign-in.
+  # Whole apple.com / icloud.com per Control D's excluded-domains guidance
+  # (https://docs.controld.com/docs/icloud-private-relay).
+  - '@@||apple-dns.net^'
+  - '@@||apple.com^'
+  - '@@||icloud.com^'
+  - '@@||apple-relay.cloudflare.com^'
+  - '@@||apple-relay.akamaized.net^'
+  - '@@||doh.dns.apple.com.v.aaplimg.com^'
+  - '@@||apple-relay.fastly-edge.com^'
 
 querylog:
   enabled: true
