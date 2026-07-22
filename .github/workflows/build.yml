@@ -14,6 +14,16 @@ on:
 
 env:
   GHCR_IMAGE: ghcr.io/${{ github.repository }}
+  # ------------------------------------------------------------------
+  # Release version is vX.Y.Z (Semantic-ish):
+  #   X.Y = YOUR CONFIG version  -> bump this by hand when you change
+  #         config/*.yaml (e.g. 1.0 -> 1.1, or 1.9 -> 2.0).
+  #   Z   = UPSTREAM version     -> managed automatically: +1 whenever
+  #         mosdns / AdGuardHome / CN rule lists change, and reset to 0
+  #         whenever you bump X.Y above.
+  # Just edit BASE_VERSION below; the workflow computes the full vX.Y.Z.
+  # ------------------------------------------------------------------
+  BASE_VERSION: "1.1"
 
 jobs:
   build:
@@ -26,21 +36,78 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve latest upstream versions
+      - name: Resolve upstream versions + compute vX.Y.Z
         id: ver
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MOSDNS=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            https://api.github.com/repos/IrineSistiana/mosdns/releases/latest | jq -r .tag_name)
-          AGH=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest | jq -r .tag_name)
-          case "$MOSDNS" in v*) ;; *) echo "::error::bad mosdns tag: '$MOSDNS' (API rate-limited?)"; exit 1 ;; esac
-          case "$AGH"    in v*) ;; *) echo "::error::bad AdGuardHome tag: '$AGH' (API rate-limited?)"; exit 1 ;; esac
-          echo "mosdns=$MOSDNS"           >> "$GITHUB_OUTPUT"
-          echo "agh=$AGH"                 >> "$GITHUB_OUTPUT"
-          echo "tag=mosdns-${MOSDNS}_agh-${AGH}" >> "$GITHUB_OUTPUT"
-          echo "Building mosdns $MOSDNS + AdGuardHome $AGH"
+          set -euo pipefail
+
+          # --- BASE_VERSION must look like X.Y ------------------------------
+          case "$BASE_VERSION" in
+            [0-9]*.[0-9]*) ;;
+            *) echo "::error::BASE_VERSION must be 'X.Y' (got '$BASE_VERSION')"; exit 1 ;;
+          esac
+
+          latest_tag() {
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$1/releases/latest" | jq -r '.tag_name'
+          }
+
+          # --- current upstream state ---------------------------------------
+          MOSDNS=$(latest_tag IrineSistiana/mosdns)
+          AGH=$(latest_tag AdguardTeam/AdGuardHome)
+          V2RAY=$(latest_tag Loyalsoldier/v2ray-rules-dat)   # direct/apple-cn/proxy lists
+          GEOIP=$(latest_tag Loyalsoldier/geoip)             # geoip cn.txt
+          for pair in "mosdns:$MOSDNS" "agh:$AGH" "v2ray-rules-dat:$V2RAY" "geoip:$GEOIP"; do
+            name=${pair%%:*}; tag=${pair#*:}
+            case "$tag" in ""|null) echo "::error::empty tag for $name (GitHub API rate-limited?)"; exit 1 ;; esac
+          done
+          case "$MOSDNS" in v*) ;; *) echo "::error::bad mosdns tag '$MOSDNS'"; exit 1 ;; esac
+          case "$AGH"    in v*) ;; *) echo "::error::bad AdGuardHome tag '$AGH'"; exit 1 ;; esac
+
+          UPSTREAM="mosdns=${MOSDNS};agh=${AGH};rules=${V2RAY}_${GEOIP}"
+          echo "Current upstream state: $UPSTREAM"
+
+          # --- previous release: read tag + embedded upstream state ---------
+          PREV=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" 2>/dev/null || echo '')
+          PREV_TAG=$(printf '%s' "$PREV"  | jq -r '.tag_name // empty')
+          PREV_STATE=$(printf '%s' "$PREV" | jq -r '.body // empty' \
+                        | sed -n 's/.*<!-- UPSTREAM_STATE: \(.*\) -->.*/\1/p' | head -n1)
+          echo "Previous release tag: ${PREV_TAG:-<none>}"
+
+          # --- decide the patch digit (Z) -----------------------------------
+          # Default: brand-new config line starts at .0
+          NEW_Z=0
+          if printf '%s' "$PREV_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            PREV_BASE=$(printf '%s' "$PREV_TAG" | sed -E 's/^v([0-9]+\.[0-9]+)\.[0-9]+$/\1/')
+            PREV_Z=$(printf   '%s' "$PREV_TAG" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+)$/\1/')
+            if [ "$PREV_BASE" = "$BASE_VERSION" ]; then
+              if [ -n "$PREV_STATE" ] && [ "$PREV_STATE" != "$UPSTREAM" ]; then
+                NEW_Z=$((PREV_Z + 1))    # upstream changed -> bump patch
+                echo "Upstream changed since $PREV_TAG -> patch bumped to $NEW_Z"
+              else
+                NEW_Z=$PREV_Z            # nothing upstream changed -> overwrite same vX.Y.Z
+                echo "Upstream unchanged -> reusing/overwriting patch $NEW_Z"
+              fi
+            else
+              echo "Config version changed ($PREV_BASE -> $BASE_VERSION) -> patch reset to 0"
+            fi
+          else
+            echo "No comparable previous vX.Y.Z release -> starting at patch 0"
+          fi
+
+          TAG="v${BASE_VERSION}.${NEW_Z}"
+          echo "Release version: $TAG"
+
+          {
+            echo "mosdns=$MOSDNS"
+            echo "agh=$AGH"
+            echo "v2ray=$V2RAY"
+            echo "geoip=$GEOIP"
+            echo "upstream=$UPSTREAM"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Config last-change info
         id: cfg
@@ -88,9 +155,11 @@ jobs:
           outputs: type=docker,dest=/tmp/mosdns-adg.tar
           cache-from: type=gha
 
-      # If a release with this version tag already exists (e.g. upstream
-      # versions unchanged since last run), delete it and its tag first,
-      # so every run produces a brand-new release with a fresh date.
+      # If a release with this exact vX.Y.Z already exists (upstream unchanged
+      # and/or you re-pushed without bumping X.Y), delete it and its tag first
+      # so the run produces a brand-new release with a fresh date. When Z was
+      # incremented (or X.Y bumped), the tag is new and this is a no-op — older
+      # releases are kept as history.
       - name: Delete previous release with same tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -102,13 +171,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: "mosdns ${{ steps.ver.outputs.mosdns }} + AdGuardHome ${{ steps.ver.outputs.agh }}"
+          name: ${{ steps.ver.outputs.tag }}
           body: |
             arm64 image tar for MikroTik RouterOS offline import (RB5009).
 
+            Version ${{ steps.ver.outputs.tag }}  (X.Y = config, Z = upstream)
+
             - mosdns: ${{ steps.ver.outputs.mosdns }}
             - AdGuardHome: ${{ steps.ver.outputs.agh }}
-            - CN rule lists: refreshed at build time (${{ github.run_id }})
+            - CN rule lists: v2ray-rules-dat ${{ steps.ver.outputs.v2ray }} + geoip ${{ steps.ver.outputs.geoip }} (refreshed at build time)
 
             Default config last changed:
             - config/mosdns.yaml: ${{ steps.cfg.outputs.mosdns_cfg }}
@@ -121,5 +192,7 @@ jobs:
             2. /container add file=usb1/mosdns-adg.tar interface=veth-dns \
                  root-dir=usb1/containers/dns mounts=dns-data envlist=dns-env \
                  start-on-boot=yes logging=yes comment="mosdns + AdGuard Home"
+
+            <!-- UPSTREAM_STATE: ${{ steps.ver.outputs.upstream }} -->
           files: /tmp/mosdns-adg.tar
           make_latest: true
