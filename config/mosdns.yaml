@@ -1,27 +1,24 @@
-# mosdns v5 - CN / foreign split resolver
-# Listens on 0.0.0.0:5335; AdGuard Home sits in front on :53 and uses
-# this as its only upstream.
+# mosdns v5 - CN / foreign split resolver. Listens 0.0.0.0:5335.
+# AdGuard Home sits in front on :53 and uses this as its only upstream.
+# Ad / malware blocking belongs in AdGuardHome.yaml, not here.
 #
-# China domains   -> AliDNS / DNSPod pool (DoT pipelined + DoH)
-# Apple special   -> see the Apple domain sets below
-# Everything else -> Cloudflare / Google / Quad9 / OpenDNS pool
+# Every hostname upstream is pinned with dial_addr - no bootstrap anywhere.
+# If you add one, pin it, or mosdns falls back to the container's system
+# resolver, which on RouterOS may point back at AdGuard Home (loop).
 #
-# NOTE (Shanghai): if you run a proxy (clash / sing-box), pointing
-# forward_remote at its DNS listener is more reliable than any public
-# foreign resolver, e.g. addr: "udp://192.168.88.x:1053".
+# Transport choice: DoT domestically (853 is open inside CN and pipelined
+# DoT is cheaper on the RB5009's CPU), DoH for remote (853 is trivially
+# blocked from CN; 443 blends into normal HTTPS). enable_pipeline is
+# RFC 7766 and applies to tcp:// and tls:// only - a no-op on https://.
 #
-# No "bootstrap:" is used anywhere. Every hostname upstream is pinned
-# with dial_addr, so mosdns never has to resolve a resolver.
+# Apple domains are split three ways; see README "Why Apple domains are
+# split three ways" for the reasoning behind each set.
 
 log:
   level: warn
 
-# HTTP API for maintenance (metrics, cache dump/flush)
-#   http://<container-ip>:8080/metrics
-#   http://<container-ip>:8080/plugins/cache/flush
-#   http://<container-ip>:8080/plugins/cache/dump
 api:
-  http: "0.0.0.0:8080"
+  http: "0.0.0.0:8080"          # /metrics, /plugins/cache/flush, /plugins/cache/dump
 
 plugins:
   # ---------- data sets ----------
@@ -44,29 +41,22 @@ plugins:
       files:
         - /data/mosdns/rules/geoip_cn.txt
 
-  # ---------- Apple split-DNS domain sets ----------
-  # Bare entry = suffix match (domain + all subdomains, i.e. "*."),
-  # full: = exact match. See the Apple rules in the main sequence below.
-  #
-  # [Host] forced to Cloudflare: Apple TV+/Music streaming, so the media
-  # CDN resolves to Apple's INTERNATIONAL edge instead of the China CDN
-  # (aaplimg / mzstatic China nodes). Note this changes which CDN serves
-  # you, NOT your Apple ID region or catalog. Best paired with a proxy;
-  # without one, international Apple edges can be slower from CN.
+  # ---------- Apple split-DNS sets ----------
+  # Bare entry = suffix match, full: = exact match.
+
+  # [Host] -> Cloudflare: forces Apple's international media CDN edge
+  # instead of the China CDN. Does not change Apple ID region or catalog.
   - tag: apple_intl_host
     type: domain_set
     args:
       exps:
         - tv.apple.com
         - video.apple.com
-        # Apple Music: suffix match also covers amp-api.music.apple.com
-        # (app/web API) - do not use full: here or the API stays on CN DNS.
-        - music.apple.com
-        # Apple Music audio streaming endpoints
+        - music.apple.com          # suffix, so amp-api.music.apple.com is covered
         - streamingaudio.itunes.apple.com
         - audio-ssl.itunes.apple.com
 
-  # PROXY -> resolve via remote DoH so DNS results match a proxied egress.
+  # [PROXY] -> remote DoH, so DNS matches a proxied egress.
   - tag: apple_intl
     type: domain_set
     args:
@@ -75,11 +65,8 @@ plugins:
         - arcade.apple.com
         - full:games.apple.com
 
-  # iCloud Private Relay setup/egress + Apple DoH -> clean international DNS.
-  # These must resolve to genuine Apple/relay IPs (not a China CDN or poisoned
-  # result) for Private Relay to come up. Matched BEFORE apple_direct so the
-  # aaplimg.com relay host escapes the China-DNS bucket below.
-  # Ref: Control D iCloud Private Relay excluded-domains list.
+  # iCloud Private Relay + Apple DoH. Must resolve to genuine Apple/relay
+  # IPs or Private Relay will not come up. Matched before apple_direct.
   - tag: apple_relay
     type: domain_set
     args:
@@ -90,10 +77,8 @@ plugins:
         - apple-relay.fastly-edge.com
         - doh.dns.apple.com.v.aaplimg.com
 
-  # DIRECT -> keep on China DNS for China CDN nodes.
-  # mzstatic.com = artwork / static assets. Identical content worldwide and
-  # much faster from the China CDN, so it stays direct. Move it up to
-  # apple_intl_host if you want every Music asset off the China CDN.
+  # [DIRECT] -> China DNS. mzstatic = artwork/static, identical worldwide
+  # and much faster from the CN CDN. Move to apple_intl_host to change that.
   - tag: apple_direct
     type: domain_set
     args:
@@ -104,118 +89,87 @@ plugins:
         - aaplimg.com
 
   # ---------- cache ----------
+  # dump_interval kept high: /data is a USB stick, minimise write cycles.
   - tag: cache
     type: cache
     args:
       size: 8192
       lazy_cache_ttl: 86400
       dump_file: /data/mosdns/cache.dump
-      dump_interval: 600
+      dump_interval: 3600
 
   # ---------- upstreams ----------
-  # concurrent: 2 -> two upstreams from the pool are queried in parallel per
-  # request and the first valid answer wins (AdGuard "parallel" behaviour).
-  # A bigger pool spreads load and adds redundancy, but every entry should
-  # actually be reachable: if both sampled upstreams are dead, that query
-  # stalls. Test any entry before trusting it:
-  #   mosdns probe pipeline tls://223.5.5.5
-  #
-  # enable_pipeline (RFC 7766 connection reuse) applies to tcp:// and
-  # tls:// ONLY. DoH already multiplexes over HTTP/2, so it is deliberately
-  # absent from every https:// entry below - there it would be a no-op.
+  # concurrent: 2 queries two upstreams from the pool in parallel; first
+  # valid answer wins. Keep pools SMALL and every entry reachable - a dead
+  # entry can be sampled and stall the query. Test before adding:
+  #   mosdns probe pipeline tls://dns.alidns.com
+  # One entry per provider: same provider over two transports is one trust
+  # boundary occupying two slots, not redundancy.
 
   - tag: forward_china
     type: forward
     args:
-      concurrent: 2
+      concurrent: 3
       upstreams:
-        # --- DoT, pipelined (usually the fastest option domestically) ---
-        - addr: "tls://dns.alidns.com"          # AliDNS / Alibaba
+        - addr: "tls://dns.alidns.com"
           dial_addr: "223.5.5.5"
           enable_pipeline: true
-        - addr: "tls://dns.alidns.com"          # AliDNS secondary IP
-          dial_addr: "223.6.6.6"
-          enable_pipeline: true
-        - addr: "tls://dot.pub"                 # DNSPod / Tencent
+          idle_timeout: 86400
+        - addr: "tls://dot.pub"
           dial_addr: "1.12.12.12"
           enable_pipeline: true
-        - addr: "tls://dot.pub"                 # DNSPod secondary IP
+          idle_timeout: 86400
+        # DoH as second path per provider (different IP + transport)
+        - addr: "https://223.6.6.6/dns-query"
+          idle_timeout: 86400
+        - addr: "https://doh.pub/dns-query"
           dial_addr: "120.53.53.53"
+          idle_timeout: 86400
+        - addr: "tls://dot.360.cn"
+          dial_addr: "218.30.118.6"          
           enable_pipeline: true
-        # --- DoH ---
-        - addr: "https://223.5.5.5/dns-query"   # AliDNS, IP literal
-        - addr: "https://223.6.6.6/dns-query"   # AliDNS, IP literal
-        - addr: "https://doh.pub/dns-query"     # DNSPod (IP-only endpoints retired)
-          dial_addr: "1.12.12.12"
-
-        # --- optional, uncomment if wanted ---
-        # 360 Secure DNS: needs a verified dial_addr IP for doh.360.cn.
-        # Confirm the endpoint answers before enabling.
-        - addr: "https://doh.360.cn/dns-query"
-        #   dial_addr: "<verify-ip>"
-        # DNSPod SM2 (ShangMi crypto): Go's TLS stack has no SM2 support,
-        # mosdns CANNOT use this endpoint. Do not enable.
-        # - addr: "https://sm2.doh.pub/dns-query"
-        # Plain UDP (fastest, unencrypted - ISP can see and tamper)
-        # - addr: "udp://223.5.5.5"
-        # - addr: "udp://119.29.29.29"
+          idle_timeout: 86400
+        # Not included: sm2.doh.pub. It works (dual-cert endpoint, mosdns
+        # gets standard TLS - Go has no SM2), but it is DNSPod again, so it
+        # adds a slot and no diversity. 360: needs a verified dial_addr IP.
 
   - tag: forward_remote
     type: forward
     args:
       concurrent: 2
       upstreams:
-        # --- DoT, pipelined. Cloudflare and Google both support RFC 7766.
-        # CAUTION: DoT uses TCP/853, a dedicated port that is far easier to
-        # identify and block from CN than DoH on 443. Probe these first; if
-        # they fail, comment them out so the pool has no dead entries.
-        - addr: "tls://cloudflare-dns.com"
-          dial_addr: "1.1.1.1"
-          enable_pipeline: true
-        - addr: "tls://dns.google"
-          dial_addr: "8.8.8.8"
-          enable_pipeline: true
-        # --- DoH (443, blends into normal HTTPS) ---
         - addr: "https://cloudflare-dns.com/dns-query"
-        #   dial_addr: "1.1.1.1"
-        # - addr: "https://cloudflare-dns.com/dns-query"
-        #   dial_addr: "1.0.0.1"
-        # - addr: "https://dns.google/dns-query"
-        #   dial_addr: "8.8.8.8"
+          dial_addr: "1.1.1.1"
+          idle_timeout: 86400
         - addr: "https://dns.google/dns-query"
-          dial_addr: "8.8.4.4"
+          dial_addr: "8.8.8.8"
+          idle_timeout: 86400
         - addr: "https://dns.quad9.net/dns-query"
           dial_addr: "9.9.9.9"
+          idle_timeout: 86400
         - addr: "https://dns.opendns.com/dns-query"
           dial_addr: "208.67.222.222"
-
-        # --- optional, uncomment if wanted ---
-        # Cisco Umbrella / Cisco Secure Access: no stable public anycast IP
-        # to pin, and no bootstrap by design, so they are left out.
-        # Note Umbrella, OpenDNS and SSE are all Cisco - little added
-        # diversity over the OpenDNS entry above.
-        - addr: "https://doh.umbrella.com/dns-query"
-        #   dial_addr: "<verify-ip>"
-        - addr: "https://dns.sse.cisco.com/dns-query"
-        #   dial_addr: "<verify-ip>"
+          idle_timeout: 86400
+        # Deliberately absent: DoT variants (853 blocked from CN), and
+        # Umbrella / Cisco SSE (no stable anycast IP to pin, and they are
+        # the same operator as OpenDNS above).
         #
-        # BEST OPTION in mainland China: point this whole block at a local
-        # proxy's DNS listener instead of public foreign resolvers:
+        # BEST OPTION in mainland China - replace all four above with your
+        # proxy's DNS listener:
         # - addr: "udp://192.168.88.x:1053"
 
-  # Cloudflare-only upstream for the Apple [Host] override (server:1.1.1.1)
+  # Cloudflare-only, for the Apple [Host] override
   - tag: forward_cloudflare
     type: forward
     args:
       concurrent: 2
       upstreams:
-        - addr: "tls://cloudflare-dns.com"
-          dial_addr: "1.1.1.1"
-          enable_pipeline: true
         - addr: "https://cloudflare-dns.com/dns-query"
           dial_addr: "1.1.1.1"
+          idle_timeout: 86400
         - addr: "https://cloudflare-dns.com/dns-query"
           dial_addr: "1.0.0.1"
+          idle_timeout: 86400
 
   # ---------- sequences ----------
   - tag: seq_china
@@ -235,43 +189,62 @@ plugins:
       - exec: prefer_ipv4
       - exec: $forward_cloudflare
 
+  # --- optional default-branch strategy (see README) ---
+  # Domestic answer trusted only if it lands on a CN IP; no terminal accept,
+  # so falling through is the signal that the branch failed.
+  - tag: seq_china_probe
+    type: sequence
+    args:
+      - exec: $forward_china
+      - matches: resp_ip $geoip_cn
+        exec: accept
+
+  # Try domestic first, verify by IP, fall back to remote. Better CDN
+  # proximity for CN sites missing from direct-list.txt, at the cost of
+  # showing every unknown domain to a CN resolver.
+  - tag: seq_default_cn_first
+    type: fallback
+    args:
+      primary: seq_china_probe
+      secondary: seq_remote
+      threshold: 500
+      always_standby: false
+
   - tag: main
     type: sequence
     args:
       - exec: $cache
       - matches: has_resp
         exec: accept
-      # Apple TV+/Music streaming -> Cloudflare (international CDN) [Host]
-      - matches: qname $apple_intl_host
+      # Each branch below is followed by has_resp/accept rather than goto,
+      # so a failed branch falls through to the generic remote branch at
+      # the end instead of returning SERVFAIL. This is deliberate.
+      - matches: qname $apple_intl_host      # Apple TV+/Music -> intl CDN
         exec: $seq_cloudflare
       - matches: has_resp
         exec: accept
-      # Apple international services (PROXY) -> remote DoH
-      - matches: qname $apple_intl
+      - matches: qname $apple_intl           # Apple intl services (PROXY)
         exec: $seq_remote
       - matches: has_resp
         exec: accept
-      # iCloud Private Relay / Apple DoH -> clean international DNS
-      - matches: qname $apple_relay
+      - matches: qname $apple_relay          # iCloud Private Relay / Apple DoH
         exec: $seq_remote
       - matches: has_resp
         exec: accept
-      # Apple domains pinned to China DNS (DIRECT)
-      - matches: qname $apple_direct
+      - matches: qname $apple_direct         # Apple CN CDN (DIRECT)
         exec: $seq_china
       - matches: has_resp
         exec: accept
-      # known GFW/proxy domains -> remote directly (skip CN check)
-      - matches: qname $geosite_proxy
+      - matches: qname $geosite_proxy        # known GFW/proxy domains
         exec: $seq_remote
       - matches: has_resp
         exec: accept
-      # CN domains -> China upstreams
-      - matches: qname $geosite_cn
+      - matches: qname $geosite_cn           # CN domains
         exec: $seq_china
       - matches: has_resp
         exec: accept
-      # everything else -> remote
+      # Default: everything unlisted goes remote (no CN resolver sees it).
+      # Swap for $seq_default_cn_first to prefer domestic-with-IP-check.
       - exec: $seq_remote
 
   # ---------- servers ----------

@@ -1,9 +1,10 @@
-# AdGuard Home — pre-seeded config (skips the first-run wizard).
-# Web UI: http://<container-ip>:3000  — NO PASSWORD by default, LAN only!
-# Set one immediately: Settings -> and add a user, or run:
+# AdGuard Home - pre-seeded config (skips the first-run wizard).
+# Web UI: http://<container-ip>:3000 - NO PASSWORD by default, LAN only!
+# Set one immediately, or run:
 #   AdGuardHome -c <this file> --update-password  (via container shell)
 #
 # Upstream is mosdns on 127.0.0.1:5335 inside the same container.
+# All ad / tracker / malware blocking lives here, not in mosdns.yaml.
 
 http:
   address: 0.0.0.0:3000
@@ -21,14 +22,16 @@ dns:
   port: 53
   upstream_dns:
     - 127.0.0.1:5335
+  # Set explicitly and keep empty: any entry here bypasses mosdns and leaks.
+  fallback_dns: []
   bootstrap_dns:
     - 223.5.5.5
     - 119.29.29.29
-  upstream_mode: load_balance
-  cache_size: 0            # mosdns already caches; avoid double caching
-  ratelimit: 0
-  enable_dnssec: false
-  aaaa_disabled: false
+  upstream_mode: load_balance   # no-op with a single upstream
+  cache_size: 0                 # mosdns already caches; avoid double caching
+  ratelimit: 0                  # LAN only, behind the router
+  enable_dnssec: false          # upstream resolvers already validate
+  aaaa_disabled: false          # IPv6 policy is mosdns's prefer_ipv4, not this
 
 filtering:
   protection_enabled: true
@@ -37,7 +40,8 @@ filtering:
   blocking_mode: default
 
 filters:
-  # anti-AD — the most complete China-oriented blocklist, hosted in CN
+  # --- ads / trackers ---
+  # anti-AD - most complete China-oriented blocklist, hosted in CN
   - enabled: true
     url: https://anti-ad.net/easylist.txt
     name: anti-AD
@@ -47,25 +51,32 @@ filters:
     url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
     name: AdGuard DNS filter
     id: 2
-  # a-dove-is-dumb — blocklist
+  # a-dove-is-dumb - defuses anti-adblock detection (not a threat feed)
   - enabled: true
     url: https://cdn.jsdelivr.net/gh/ignaciocastro/a-dove-is-dumb@latest/list.txt
     name: a-dove-is-dumb
     id: 3
-  # a-dove-is-dumb — IPv6 blocklist
   - enabled: true
     url: https://a.dove.isdumb.one/ipv6.txt
     name: a-dove-is-dumb IPv6
     id: 4
 
+  # --- malware / phishing ---
+  # jsDelivr is used deliberately: it resolves and downloads reliably from CN.
+  # Verify each URL loads from the router before trusting it.
+  - enabled: true
+    url: https://phishing.army/download/phishing_army_blocklist_extended.txt
+    name: Phishing Army (extended)
+    id: 5
+
 # Custom rules applied on top of the subscribed filters above.
 user_rules:
-  # Block all Adobe telemetry / activation-check domains (apex + subdomains)
+  # Block Adobe telemetry / activation-check domains (apex + subdomains)
   - '||ic.adobe.io^'
   - '||adobestats.io^'
   # Allow-list so no blocklist can break iCloud Private Relay or Apple sign-in.
-  # Whole apple.com / icloud.com per Control D's excluded-domains guidance
-  # (https://docs.controld.com/docs/icloud-private-relay).
+  # Per Control D's excluded-domains guidance:
+  # https://docs.controld.com/docs/icloud-private-relay
   - '@@||apple-dns.net^'
   - '@@||apple.com^'
   - '@@||icloud.com^'
@@ -76,7 +87,8 @@ user_rules:
 
 querylog:
   enabled: true
-  interval: 24h        # keep small: RouterOS storage is limited
+  file_enabled: false   # memory only - /data is a USB stick
+  interval: 24h
   size_memory: 1000
 
 statistics:
