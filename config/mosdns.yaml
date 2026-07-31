@@ -1,13 +1,17 @@
-# mosdns v5 — CN / foreign split resolver
-# Listens on 127.0.0.1:5335 (and 0.0.0.0 for debugging); AdGuard Home
-# sits in front of it on :53 and uses this as its only upstream.
+# mosdns v5 - CN / foreign split resolver
+# Listens on 0.0.0.0:5335; AdGuard Home sits in front on :53 and uses
+# this as its only upstream.
 #
-# China domains  -> AliDNS / DNSPod (plain UDP, fast, correct CDN results)
-# Everything else -> DoH to 1.1.1.1 / 8.8.8.8
-#   NOTE (Shanghai): plain 8.8.8.8 UDP is poisoned. DoH to the raw IPs
-#   usually works, but if you run a proxy (e.g. clash/sing-box) it is far
-#   more reliable to point forward_remote at your proxy's DNS port instead,
-#   e.g. addr: "udp://192.168.88.x:1053".
+# China domains   -> AliDNS / DNSPod pool (DoT pipelined + DoH)
+# Apple special   -> see the Apple domain sets below
+# Everything else -> Cloudflare / Google / Quad9 / OpenDNS pool
+#
+# NOTE (Shanghai): if you run a proxy (clash / sing-box), pointing
+# forward_remote at its DNS listener is more reliable than any public
+# foreign resolver, e.g. addr: "udp://192.168.88.x:1053".
+#
+# No "bootstrap:" is used anywhere. Every hostname upstream is pinned
+# with dial_addr, so mosdns never has to resolve a resolver.
 
 log:
   level: warn
@@ -44,15 +48,23 @@ plugins:
   # Bare entry = suffix match (domain + all subdomains, i.e. "*."),
   # full: = exact match. See the Apple rules in the main sequence below.
   #
-  # [Host] *.tv.apple.com / *.video.apple.com = 1.1.1.1 :
-  # force Apple TV+/Music streaming onto Apple's INTERNATIONAL CDN via
-  # Cloudflare DoH.
+  # [Host] forced to Cloudflare: Apple TV+/Music streaming, so the media
+  # CDN resolves to Apple's INTERNATIONAL edge instead of the China CDN
+  # (aaplimg / mzstatic China nodes). Note this changes which CDN serves
+  # you, NOT your Apple ID region or catalog. Best paired with a proxy;
+  # without one, international Apple edges can be slower from CN.
   - tag: apple_intl_host
     type: domain_set
     args:
       exps:
         - tv.apple.com
         - video.apple.com
+        # Apple Music: suffix match also covers amp-api.music.apple.com
+        # (app/web API) - do not use full: here or the API stays on CN DNS.
+        - music.apple.com
+        # Apple Music audio streaming endpoints
+        - streamingaudio.itunes.apple.com
+        - audio-ssl.itunes.apple.com
 
   # PROXY -> resolve via remote DoH so DNS results match a proxied egress.
   - tag: apple_intl
@@ -65,10 +77,9 @@ plugins:
 
   # iCloud Private Relay setup/egress + Apple DoH -> clean international DNS.
   # These must resolve to genuine Apple/relay IPs (not a China CDN or poisoned
-  # result) for Private Relay to come up. Replaces the previous broad
-  # akamaized.net rule with just the Apple-relay host. Ref: Control D iCloud
-  # Private Relay excluded-domains list. Matched BEFORE apple_direct so the
+  # result) for Private Relay to come up. Matched BEFORE apple_direct so the
   # aaplimg.com relay host escapes the China-DNS bucket below.
+  # Ref: Control D iCloud Private Relay excluded-domains list.
   - tag: apple_relay
     type: domain_set
     args:
@@ -80,17 +91,17 @@ plugins:
         - doh.dns.apple.com.v.aaplimg.com
 
   # DIRECT -> keep on China DNS for China CDN nodes.
+  # mzstatic.com = artwork / static assets. Identical content worldwide and
+  # much faster from the China CDN, so it stays direct. Move it up to
+  # apple_intl_host if you want every Music asset off the China CDN.
   - tag: apple_direct
     type: domain_set
     args:
       exps:
         - apple.com.cn
         - icloud.com.cn
-        - full:music.apple.com
         - mzstatic.com
         - aaplimg.com
-        - full:streamingaudio.itunes.apple.com
-        - audio-ssl.itunes.apple.com
 
   # ---------- cache ----------
   - tag: cache
@@ -102,30 +113,109 @@ plugins:
       dump_interval: 600
 
   # ---------- upstreams ----------
+  # concurrent: 2 -> two upstreams from the pool are queried in parallel per
+  # request and the first valid answer wins (AdGuard "parallel" behaviour).
+  # A bigger pool spreads load and adds redundancy, but every entry should
+  # actually be reachable: if both sampled upstreams are dead, that query
+  # stalls. Test any entry before trusting it:
+  #   mosdns probe pipeline tls://223.5.5.5
+  #
+  # enable_pipeline (RFC 7766 connection reuse) applies to tcp:// and
+  # tls:// ONLY. DoH already multiplexes over HTTP/2, so it is deliberately
+  # absent from every https:// entry below - there it would be a no-op.
+
   - tag: forward_china
     type: forward
     args:
       concurrent: 2
       upstreams:
-        - addr: "udp://223.5.5.5"     # AliDNS
-        - addr: "udp://119.29.29.29"  # DNSPod
+        # --- DoT, pipelined (usually the fastest option domestically) ---
+        - addr: "tls://dns.alidns.com"          # AliDNS / Alibaba
+          dial_addr: "223.5.5.5"
+          enable_pipeline: true
+        - addr: "tls://dns.alidns.com"          # AliDNS secondary IP
+          dial_addr: "223.6.6.6"
+          enable_pipeline: true
+        - addr: "tls://dot.pub"                 # DNSPod / Tencent
+          dial_addr: "1.12.12.12"
+          enable_pipeline: true
+        - addr: "tls://dot.pub"                 # DNSPod secondary IP
+          dial_addr: "120.53.53.53"
+          enable_pipeline: true
+        # --- DoH ---
+        - addr: "https://223.5.5.5/dns-query"   # AliDNS, IP literal
+        - addr: "https://223.6.6.6/dns-query"   # AliDNS, IP literal
+        - addr: "https://doh.pub/dns-query"     # DNSPod (IP-only endpoints retired)
+          dial_addr: "1.12.12.12"
+
+        # --- optional, uncomment if wanted ---
+        # 360 Secure DNS: needs a verified dial_addr IP for doh.360.cn.
+        # Confirm the endpoint answers before enabling.
+        - addr: "https://doh.360.cn/dns-query"
+        #   dial_addr: "<verify-ip>"
+        # DNSPod SM2 (ShangMi crypto): Go's TLS stack has no SM2 support,
+        # mosdns CANNOT use this endpoint. Do not enable.
+        # - addr: "https://sm2.doh.pub/dns-query"
+        # Plain UDP (fastest, unencrypted - ISP can see and tamper)
+        # - addr: "udp://223.5.5.5"
+        # - addr: "udp://119.29.29.29"
 
   - tag: forward_remote
     type: forward
     args:
       concurrent: 2
       upstreams:
-        - addr: "https://1.1.1.1/dns-query"
-        - addr: "https://8.8.8.8/dns-query"
-        # If you have a local proxy providing clean DNS, prefer it:
-        # - addr: "udp://192.168.88.2:1053"
+        # --- DoT, pipelined. Cloudflare and Google both support RFC 7766.
+        # CAUTION: DoT uses TCP/853, a dedicated port that is far easier to
+        # identify and block from CN than DoH on 443. Probe these first; if
+        # they fail, comment them out so the pool has no dead entries.
+        - addr: "tls://cloudflare-dns.com"
+          dial_addr: "1.1.1.1"
+          enable_pipeline: true
+        - addr: "tls://dns.google"
+          dial_addr: "8.8.8.8"
+          enable_pipeline: true
+        # --- DoH (443, blends into normal HTTPS) ---
+        - addr: "https://cloudflare-dns.com/dns-query"
+        #   dial_addr: "1.1.1.1"
+        # - addr: "https://cloudflare-dns.com/dns-query"
+        #   dial_addr: "1.0.0.1"
+        # - addr: "https://dns.google/dns-query"
+        #   dial_addr: "8.8.8.8"
+        - addr: "https://dns.google/dns-query"
+          dial_addr: "8.8.4.4"
+        - addr: "https://dns.quad9.net/dns-query"
+          dial_addr: "9.9.9.9"
+        - addr: "https://dns.opendns.com/dns-query"
+          dial_addr: "208.67.222.222"
+
+        # --- optional, uncomment if wanted ---
+        # Cisco Umbrella / Cisco Secure Access: no stable public anycast IP
+        # to pin, and no bootstrap by design, so they are left out.
+        # Note Umbrella, OpenDNS and SSE are all Cisco - little added
+        # diversity over the OpenDNS entry above.
+        - addr: "https://doh.umbrella.com/dns-query"
+        #   dial_addr: "<verify-ip>"
+        - addr: "https://dns.sse.cisco.com/dns-query"
+        #   dial_addr: "<verify-ip>"
+        #
+        # BEST OPTION in mainland China: point this whole block at a local
+        # proxy's DNS listener instead of public foreign resolvers:
+        # - addr: "udp://192.168.88.x:1053"
 
   # Cloudflare-only upstream for the Apple [Host] override (server:1.1.1.1)
   - tag: forward_cloudflare
     type: forward
     args:
+      concurrent: 2
       upstreams:
-        - addr: "https://1.1.1.1/dns-query"
+        - addr: "tls://cloudflare-dns.com"
+          dial_addr: "1.1.1.1"
+          enable_pipeline: true
+        - addr: "https://cloudflare-dns.com/dns-query"
+          dial_addr: "1.1.1.1"
+        - addr: "https://cloudflare-dns.com/dns-query"
+          dial_addr: "1.0.0.1"
 
   # ---------- sequences ----------
   - tag: seq_china
