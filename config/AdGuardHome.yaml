@@ -42,14 +42,14 @@ filtering:
 filters:
   # --- ads / trackers ---
   # anti-AD - most complete China-oriented blocklist, hosted in CN
-  - enabled: true
+  - enabled: false
     url: https://anti-ad.net/easylist.txt
     name: anti-AD
     id: 1
-  # AdGuard DNS filter (may be slow to update from CN; disable if it stalls)
-  - enabled: false
-    url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
-    name: AdGuard DNS filter
+  # Sukka DNS filter, rule snippet & rule set mainly for Surge
+  - enabled: true
+    url: https://ruleset.skk.moe/Internal/reject-adguardhome.txt
+    name: Sukka-ruleset
     id: 2
   # a-dove-is-dumb - defuses anti-adblock detection (not a threat feed)
   - enabled: true

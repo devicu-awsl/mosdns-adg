@@ -35,16 +35,12 @@ RUN curl -fsSL -o /tmp/agh.tar.gz \
  && mv /tmp/AdGuardHome/AdGuardHome /out/bin/AdGuardHome \
  && chmod +x /out/bin/AdGuardHome
 
-# China domain / IP rule lists for mosdns (refreshed on every image build)
-RUN mkdir -p /out/rules \
- && curl -fsSL -o /out/rules/geosite_cn.txt \
-      "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/direct-list.txt" \
- && curl -fsSL -o /out/rules/geosite_apple_cn.txt \
-      "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/apple-cn.txt" \
- && curl -fsSL -o /out/rules/geosite_proxy.txt \
-      "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/proxy-list.txt" \
- && curl -fsSL -o /out/rules/geoip_cn.txt \
-      "https://raw.githubusercontent.com/Loyalsoldier/geoip/release/text/cn.txt"
+# China / proxy rule lists, processed at BUILD time (see scripts/build-rules.py).
+# Merging, dedup, suffix-collapse and the proxy reduction all happen here so
+# the router only ever loads entries that can change a routing decision.
+COPY scripts/build-rules.py /tmp/build-rules.py
+RUN apk add --no-cache python3 \
+ && python3 /tmp/build-rules.py /out/rules
 
 ########################################
 # Stage 2: runtime image

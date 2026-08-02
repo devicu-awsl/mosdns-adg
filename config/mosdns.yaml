@@ -22,24 +22,35 @@ api:
 
 plugins:
   # ---------- data sets ----------
+  # direct-list + apple-cn, merged/deduped/suffix-collapsed at build time.
+  # ~112k entries; this is by far the largest RAM consumer in mosdns and
+  # cannot be shrunk further without losing CN coverage.
   - tag: geosite_cn
     type: domain_set
     args:
       files:
         - /data/mosdns/rules/geosite_cn.txt
-        - /data/mosdns/rules/geosite_apple_cn.txt
 
+  # Reduced proxy list: only entries that can override a CN match (~460 of
+  # 27k). Everything else already reaches the remote branch by default, so
+  # loading the full list would cost RAM for zero behaviour change.
+  # If you enable seq_default_cn_first below, that assumption breaks -
+  # switch this to geosite_proxy_full.txt.
   - tag: geosite_proxy
     type: domain_set
     args:
       files:
         - /data/mosdns/rules/geosite_proxy.txt
 
-  - tag: geoip_cn
-    type: ip_set
-    args:
-      files:
-        - /data/mosdns/rules/geoip_cn.txt
+  # geoip_cn is ONLY used by seq_china_probe (cn-first mode, disabled below).
+  # mosdns instantiates every plugin whether referenced or not, so leaving it
+  # enabled would load ~5.8k CIDRs for nothing. Uncomment as a set with the
+  # two sequences near the bottom.
+  # - tag: geoip_cn
+  #   type: ip_set
+  #   args:
+  #     files:
+  #       - /data/mosdns/rules/geoip_cn.txt
 
   # ---------- Apple split-DNS sets ----------
   # Bare entry = suffix match, full: = exact match.
@@ -192,23 +203,28 @@ plugins:
   # --- optional default-branch strategy (see README) ---
   # Domestic answer trusted only if it lands on a CN IP; no terminal accept,
   # so falling through is the signal that the branch failed.
-  - tag: seq_china_probe
-    type: sequence
-    args:
-      - exec: $forward_china
-      - matches: resp_ip $geoip_cn
-        exec: accept
+  # - tag: seq_china_probe
+  #   type: sequence
+  #   args:
+  #     - exec: $forward_china
+  #     - matches: resp_ip $geoip_cn
+  #       exec: accept
 
   # Try domestic first, verify by IP, fall back to remote. Better CDN
   # proximity for CN sites missing from direct-list.txt, at the cost of
   # showing every unknown domain to a CN resolver.
-  - tag: seq_default_cn_first
-    type: fallback
-    args:
-      primary: seq_china_probe
-      secondary: seq_remote
-      threshold: 500
-      always_standby: false
+  # - tag: seq_default_cn_first
+  #   type: fallback
+  #   args:
+  #     primary: seq_china_probe
+  #     secondary: seq_remote
+  #     threshold: 500
+  #     always_standby: false
+  #
+  # To enable cn-first mode, uncomment ALL FOUR of: geoip_cn, seq_china_probe,
+  # seq_default_cn_first, and switch the last line of "main" to it. Also point
+  # geosite_proxy at geosite_proxy_full.txt - the reduced list is only valid
+  # while the default branch is seq_remote.
 
   - tag: main
     type: sequence
