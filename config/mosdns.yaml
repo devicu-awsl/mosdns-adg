@@ -99,6 +99,97 @@ plugins:
         - mzstatic.com
         - aaplimg.com
 
+  # ---------- local / internal names ----------
+  # Never send these to a public resolver: it leaks internal naming to
+  # AliDNS/Cloudflare and can only ever come back NXDOMAIN anyway.
+  # This is the DNS-useful half of a Clash "LAN" ruleset. It is static
+  # (RFC 6761/8375 + your own gear), so it is inlined rather than
+  # subscribed - a fetched list would add a dependency for names that
+  # never change, plus vendor domains for hardware you do not own.
+  - tag: local_domains
+    type: domain_set
+    args:
+      exps:
+        - local            # mDNS / Bonjour
+        - localhost
+        - localdomain
+        - lan
+        - home
+        - home.arpa        # RFC 8375
+        - internal
+        - intranet
+        - corp
+        - private
+        - invalid          # RFC 6761
+        - test
+        - example
+        - onion            # Tor - must not be resolved by DNS
+        # --- reverse zones for private ranges (RFC 6761) ---
+        # AdGuard Home also answers these locally, but mosdns is reachable
+        # directly on :5335, so it should not depend on AGH being in front.
+        - 10.in-addr.arpa
+        - 168.192.in-addr.arpa
+        - 254.169.in-addr.arpa
+        - 16.172.in-addr.arpa
+        - 17.172.in-addr.arpa
+        - 18.172.in-addr.arpa
+        - 19.172.in-addr.arpa
+        - 20.172.in-addr.arpa
+        - 21.172.in-addr.arpa
+        - 22.172.in-addr.arpa
+        - 23.172.in-addr.arpa
+        - 24.172.in-addr.arpa
+        - 25.172.in-addr.arpa
+        - 26.172.in-addr.arpa
+        - 27.172.in-addr.arpa
+        - 28.172.in-addr.arpa
+        - 29.172.in-addr.arpa
+        - 30.172.in-addr.arpa
+        - 31.172.in-addr.arpa
+        # --- your own gear: add what you actually have ---
+        - tplinkwifi.net   # TP-Link APs (international firmware)
+        - tplogin.cn       # TP-Link APs (China firmware) - likely yours
+        - tplinkap.net
+        - tplinkrepeater.net
+        - router            # generic, used by several vendors
+        # NOTE: rejecting only stops the leak. To actually REACH a device
+        # by name, add a DNS rewrite in AdGuard Home instead:
+        #   Filters -> DNS rewrites -> tplinkwifi.net = 192.168.88.x
+
+  # ---------- rebinding exceptions ----------
+  # These are REAL public DNS zones whose whole purpose is to return a
+  # private address: Plex hands out 192-168-88-10.<hash>.plex.direct so a
+  # browser can reach your server over TLS on the LAN, and Ubiquiti does
+  # the same with ui.direct. They must resolve normally AND be exempt from
+  # the private-IP check below, or local Plex playback breaks.
+  # Do NOT put them in local_domains - rejecting them breaks Plex too.
+  - tag: rebind_ok
+    type: domain_set
+    args:
+      exps:
+        - plex.direct
+        - ui.direct
+
+  # ---------- DNS rebinding protection ----------
+  # A public resolver has no legitimate reason to answer with an address
+  # inside your LAN. When it does, it is either a hijacking ISP or a
+  # rebinding attack aimed at the router's web UI. 10 CIDRs, ~nothing in RAM.
+  - tag: private_ip
+    type: ip_set
+    args:
+      ips:
+        - 0.0.0.0/8
+        - 10.0.0.0/8
+        - 100.64.0.0/10    # CGNAT
+        - 127.0.0.0/8
+        - 169.254.0.0/16
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 224.0.0.0/4      # multicast - never a valid answer from a resolver
+        - ::1/128
+        - fc00::/7         # ULA
+        - fe80::/10        # link-local
+
   # ---------- cache ----------
   # dump_interval kept high: /data is a USB stick, minimise write cycles.
   - tag: cache
@@ -187,18 +278,31 @@ plugins:
     type: sequence
     args:
       - exec: $forward_china
+      # reject a LAN address coming back from a public resolver
+      - matches: qname $rebind_ok
+        exec: accept
+      - matches: resp_ip $private_ip
+        exec: reject 3
 
   - tag: seq_remote
     type: sequence
     args:
       - exec: prefer_ipv4
       - exec: $forward_remote
+      - matches: qname $rebind_ok
+        exec: accept
+      - matches: resp_ip $private_ip
+        exec: reject 3
 
   - tag: seq_cloudflare
     type: sequence
     args:
       - exec: prefer_ipv4
       - exec: $forward_cloudflare
+      - matches: qname $rebind_ok
+        exec: accept
+      - matches: resp_ip $private_ip
+        exec: reject 3
 
   # --- optional default-branch strategy (see README) ---
   # Domestic answer trusted only if it lands on a CN IP; no terminal accept,
@@ -229,6 +333,12 @@ plugins:
   - tag: main
     type: sequence
     args:
+      # Local/internal names: answer NXDOMAIN immediately. Before the cache,
+      # so they never occupy cache slots. If you would rather have RouterOS
+      # answer them (DHCP hostnames / static DNS entries), replace the reject
+      # with a forward to the router - note that needs allow-remote-requests=yes.
+      - matches: qname $local_domains
+        exec: reject 3
       - exec: $cache
       - matches: has_resp
         exec: accept
