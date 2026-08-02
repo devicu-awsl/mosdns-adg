@@ -136,6 +136,7 @@ jobs:
           build-args: |
             MOSDNS_VERSION=${{ steps.ver.outputs.mosdns }}
             ADGUARD_VERSION=${{ steps.ver.outputs.agh }}
+            RULES_VERSION=${{ steps.ver.outputs.v2ray }}_${{ steps.ver.outputs.geoip }}
           tags: |
             ${{ env.GHCR_IMAGE }}:latest
             ${{ env.GHCR_IMAGE }}:${{ steps.ver.outputs.tag }}
@@ -151,6 +152,7 @@ jobs:
           build-args: |
             MOSDNS_VERSION=${{ steps.ver.outputs.mosdns }}
             ADGUARD_VERSION=${{ steps.ver.outputs.agh }}
+            RULES_VERSION=${{ steps.ver.outputs.v2ray }}_${{ steps.ver.outputs.geoip }}
           tags: mosdns-adg:latest
           outputs: type=docker,dest=/tmp/mosdns-adg.tar
           cache-from: type=gha

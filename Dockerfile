@@ -38,8 +38,17 @@ RUN curl -fsSL -o /tmp/agh.tar.gz \
 # China / proxy rule lists, processed at BUILD time (see scripts/build-rules.py).
 # Merging, dedup, suffix-collapse and the proxy reduction all happen here so
 # the router only ever loads entries that can change a routing decision.
+# python3 in its own layer so it stays cached across builds
+RUN apk add --no-cache python3
 COPY scripts/build-rules.py /tmp/build-rules.py
-RUN apk add --no-cache python3 \
+
+# RULES_VERSION exists ONLY to bust the layer cache. Without it, a weekly
+# build where mosdns and AdGuardHome are unchanged would reuse the cached
+# layer below and ship LAST WEEK's rule lists, while the release notes
+# claim they were refreshed. The workflow passes the Loyalsoldier release
+# tags; any change to either forces this layer to rebuild.
+ARG RULES_VERSION=dev
+RUN echo "rule lists built against: ${RULES_VERSION}" \
  && python3 /tmp/build-rules.py /out/rules
 
 ########################################
