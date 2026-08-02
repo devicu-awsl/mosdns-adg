@@ -76,7 +76,7 @@ add remote-image=yourdockerhubuser/mosdns-adguard:latest \
 # Per-container limits (ram-high in step 4 is the GLOBAL default; this is
 # the one that applies to this container).
 /container
-set [find comment~"mosdns"] memory-high=384M shm-size=64M
+set [find comment~"mosdns"] memory-high=512M shm-size=64M
 
 # Offline alternative to remote-image: download mosdns-adg.tar from the repo
 # Releases page, scp it to usb1/, and swap the line above for:
