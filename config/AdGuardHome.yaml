@@ -47,7 +47,7 @@ filters:
     name: anti-AD
     id: 1
   # Sukka DNS filter, rule snippet & rule set mainly for Surge
-  - enabled: true
+  - enabled: false
     url: https://ruleset.skk.moe/Internal/reject-adguardhome.txt
     name: Sukka-ruleset
     id: 2
@@ -60,6 +60,11 @@ filters:
     url: https://a.dove.isdumb.one/ipv6.txt
     name: a-dove-is-dumb IPv6
     id: 4
+  # github-accelerate-host
+  - enabled: true
+    url: https://raw.hellogithub.com/hosts
+    name: github-accel-host
+    id: 5
 
   # --- malware / phishing ---
   # jsDelivr is used deliberately: it resolves and downloads reliably from CN.
@@ -67,7 +72,7 @@ filters:
   - enabled: true
     url: https://phishing.army/download/phishing_army_blocklist_extended.txt
     name: Phishing Army (extended)
-    id: 5
+    id: 6
 
 # Custom rules applied on top of the subscribed filters above.
 user_rules:
